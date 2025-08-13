@@ -17,15 +17,35 @@ resource "aws_iam_role" "lambda_bedrock_role" {
 
 resource "aws_iam_policy" "lambda_bedrock_policy" {
   name        = "${local.project_name}-lambda-bedrock-policy"
-  description = "Policy for Lambda to invoke Bedrock models"
+  description = "Policy for Lambda to invoke Bedrock agent and execute Athena queries"
   policy      = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
         Effect = "Allow"
         Action = [
-          "bedrock:InvokeModel",
-          "bedrock:InvokeModelWithResponseStream"
+          "bedrock:*"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "athena:StartQueryExecution",
+          "athena:GetQueryExecution",
+          "athena:GetQueryResults",
+          "athena:StopQueryExecution",
+          "athena:GetWorkGroup"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetTable",
+          "glue:GetTables"
         ]
         Resource = "*"
       },
@@ -42,23 +62,33 @@ resource "aws_iam_policy" "lambda_bedrock_policy" {
         Effect = "Allow"
         Action = [
           "s3:GetObject",
-          "s3:ListBucket"
+          "s3:ListBucket",
+          "s3:PutObject"
         ]
         Resource = [
           aws_s3_bucket.knowledge_base_input_data.arn,
           "${aws_s3_bucket.knowledge_base_input_data.arn}/*",
           aws_s3_bucket.knowledge_base_storage.arn,
-          "${aws_s3_bucket.knowledge_base_storage.arn}/*"
+          "${aws_s3_bucket.knowledge_base_storage.arn}/*",
+          aws_s3_bucket.athena_query_results.arn,
+          "${aws_s3_bucket.athena_query_results.arn}/*"
         ]
       },
       {
         Effect = "Allow"
         Action = [
-          "bedrock:Retrieve",
-          "bedrock:RetrieveAndGenerate"
+          "s3:GetBucketLocation",
+          "s3:GetBucketVersioning",
+          "s3:GetBucketPolicy",
+          "s3:PutBucketPolicy",
+          "s3:DeleteObject",
+          "s3:DeleteObjectVersion"
         ]
-        Resource = aws_bedrockagent_knowledge_base.main.arn
-      }
+        Resource = [
+          aws_s3_bucket.athena_query_results.arn,
+          "${aws_s3_bucket.athena_query_results.arn}/*"
+        ]
+      },
     ]
   })
 }

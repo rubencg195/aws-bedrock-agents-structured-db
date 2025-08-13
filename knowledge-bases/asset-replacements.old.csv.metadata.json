@@ -44,6 +44,9 @@
                         "fieldName": "Estimated Replacement Date"
                     },
                     {
+                        "fieldName": "Installation Date"
+                    },
+                    {
                         "fieldName": "Warranty Expiration Date"
                     },
                     {

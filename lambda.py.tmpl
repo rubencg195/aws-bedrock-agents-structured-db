@@ -1,91 +1,521 @@
-import os
-import boto3
 import json
-import traceback
+import boto3
+import time
+import os
+from typing import Dict, Any
 
-class MCPClient:
-    def __init__(self, bedrock_client, knowledge_base_id, model_arn):
-        self.bedrock_client = bedrock_client
-        self.knowledge_base_id = knowledge_base_id
-        self.model_arn = model_arn
-
-    def query_knowledge_base(self, user_prompt, max_tokens=256, temperature=0.5):
-        # Use Bedrock Knowledge Base RetrieveAndGenerate API
-        response = self.bedrock_client.retrieve_and_generate(
-            input={
-                "text": user_prompt
-            },
-            retrieveAndGenerateConfiguration={
-                "type": "KNOWLEDGE_BASE",
-                "knowledgeBaseConfiguration": {
-                    "knowledgeBaseId": self.knowledge_base_id,
-                    "modelArn": self.model_arn,
-                    "retrievalConfiguration": {
-                        "vectorSearchConfiguration": {
-                            "numberOfResults": 5
-                        }
-                    },
-                    "generationConfiguration": {
-                        "inferenceConfig": {
-                            "textInferenceConfig": {
-                                "maxTokens": max_tokens,
-                                "temperature": temperature
-                            }
-                        }
-                    }
-                }
-            }
-        )
+def generate_response_body(status_code: int, data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Generate a standardized Lambda response body.
+    
+    Args:
+        status_code: HTTP status code
+        data: Data to include in the response body
         
-        return response
+    Returns:
+        Lambda response format with statusCode and JSON body
+    """
+    return {
+        'statusCode': status_code,
+        'body': json.dumps(data)
+    }
 
-def parse_response(response):
-    output = response["output"]["text"]
-    citations = list()
-    for citation in response["citations"]:
-        for retrieved_reference in citation["retrievedReferences"]:
-            print(retrieved_reference)
-            citations.append({
-                "content": retrieved_reference["content"]["text"],
-                "location": retrieved_reference["location"]["s3Location"]["uri"]
-            })
-    return output, citations
-
-def lambda_handler(event, context):
-    print(event)
-    print(os.environ.get("BEDROCK_REGION"))
-    print(os.environ.get("MODEL_ARN"))
-    print(os.environ.get("KNOWLEDGE_BASE_ID"))
-    bedrock = boto3.client("bedrock-agent-runtime", region_name=os.environ.get("BEDROCK_REGION", "us-east-1"))
-    model_arn = event.get("model_arn", os.environ.get("MODEL_ARN"))
-    prompt = event.get("question", "Find me all transactions done in New York.")
-    knowledge_base_id = event.get("knowledge_base_id", os.environ.get("KNOWLEDGE_BASE_ID"))
+def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    """
+    Lambda function that:
+    1. Receives a natural language prompt
+    2. Triggers the Bedrock agent to generate SQL
+    3. Executes the SQL query using Athena
+    4. Returns the results
+    """
     
     try:
-        mcp_client = MCPClient(
-            bedrock_client=bedrock,
-            knowledge_base_id=knowledge_base_id,
-            model_arn=model_arn
-        )
+        # Log environment variables for debugging
+        print("Environment variables:")
+        print(f"  BEDROCK_AGENT_ID: {os.environ.get('BEDROCK_AGENT_ID', 'NOT_SET')}")
+        print(f"  BEDROCK_AGENT_ALIAS_ID: {os.environ.get('BEDROCK_AGENT_ALIAS_ID', 'NOT_SET')}")
+        print(f"  ATHENA_DATABASE_NAME: {os.environ.get('ATHENA_DATABASE_NAME', 'NOT_SET')}")
+        print(f"  ATHENA_OUTPUT_LOCATION: {os.environ.get('ATHENA_OUTPUT_LOCATION', 'NOT_SET')}")
+        print(f"  ATHENA_WORKGROUP_NAME: {os.environ.get('ATHENA_WORKGROUP_NAME', 'NOT_SET')}")
+        print(f"  BEDROCK_REGION: {os.environ.get('BEDROCK_REGION', 'NOT_SET')}")
         
-        result = mcp_client.query_knowledge_base(
-            user_prompt=prompt,
-            max_tokens=256,
-            temperature=0.5
-        )
+        # Extract the question from the event
+        question = event.get('question')
+        print(f"Event received: {json.dumps(event, indent=2)}")
         
-        output, citations = parse_response(result)
-
-        return {
-            "statusCode": 200,
-            "question": prompt,
-            "output": output,
-            "citations": citations
-        }
+        if not question:
+            print("No question provided in event")
+            return generate_response_body(400, {
+                'error': 'No question provided in the event',
+                'usage': 'Send a JSON event with: {"question": "your natural language query"}'
+            })
+        
+        print(f"Received question: {question}")
+        
+        # Initialize dependencies and get configuration
+        dependencies = initialize_dependencies()
+        if not dependencies['success']:
+            return generate_response_body(500, {
+                'error': 'Failed to initialize dependencies',
+                'details': dependencies['error']
+            })
+        
+        bedrock_client = dependencies['bedrock_client']
+        athena_client = dependencies['athena_client']
+        agent_id = dependencies['agent_id']
+        agent_alias_id = dependencies['agent_alias_id']
+        database_name = dependencies['database_name']
+        output_location = dependencies['output_location']
+        workgroup_name = dependencies['workgroup_name']
+        
+        # Invoke the Bedrock agent to generate SQL
+        sql_query = invoke_bedrock_agent(bedrock_client, question, agent_id, agent_alias_id)
+        if not sql_query:
+            return generate_response_body(500, {
+                'error': 'Failed to generate SQL query from the question'
+            })
+        
+        print(f"Generated SQL query successfully: {sql_query}")
+        print(f"Executing query in database: {database_name}")
+        
+        # Execute the SQL query using Athena
+        query_result = execute_athena_query(athena_client, sql_query, database_name, output_location, workgroup_name)
+        
+        if query_result['success']:
+            return generate_response_body(200, {
+                'success': True,
+                'question': question,
+                'sql_query': sql_query,
+                'query_execution_id': query_result['query_execution_id'],
+                'results': query_result['results'],
+                'row_count': len(query_result['results']) if query_result['results'] else 0
+            })
+        else:
+            return generate_response_body(500, {
+                'error': query_result['error'],
+                'details': query_result.get('details', ''),
+                'query_execution_id': query_result.get('query_execution_id', ''),
+                'sql_query': sql_query
+            })
+    
     except Exception as e:
-        print(e)
-        print(traceback.format_exc())
+        print(f"Unhandled exception in lambda_handler: {str(e)}")
+        print(f"Exception type: {type(e)}")
+        print(f"Exception args: {e.args}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        
+        return generate_response_body(500, {
+            'error': 'Internal server error',
+            'details': str(e),
+            'exception_type': str(type(e).__name__)
+        })
+
+def initialize_dependencies() -> Dict[str, Any]:
+    """
+    Initialize both Bedrock and Athena clients and retrieve configuration.
+    Returns a dictionary with success status and initialized dependencies/configuration.
+    """
+    try:
+        # Initialize Bedrock agent runtime client
+        print("Initializing Bedrock agent runtime client...")
+        try:
+            bedrock_client = boto3.client('bedrock-agent-runtime')
+            print("Bedrock agent runtime client initialized successfully")
+        except Exception as e:
+            print(f"Error initializing Bedrock client: {str(e)}")
+            return {
+                'success': False,
+                'error': f'Failed to initialize Bedrock client: {str(e)}'
+            }
+        
+        # Initialize Athena client
+        print("Initializing Athena client...")
+        try:
+            athena_client = boto3.client('athena')
+            print("Athena client initialized successfully")
+        except Exception as e:
+            print(f"Error initializing Athena client: {str(e)}")
+            return {
+                'success': False,
+                'error': f'Failed to initialize Athena client: {str(e)}'
+            }
+        
+        # Get agent and alias IDs from environment variables
+        print("Retrieving agent configuration from environment...")
+        agent_id = os.environ.get('BEDROCK_AGENT_ID')
+        agent_alias_id = os.environ.get('BEDROCK_AGENT_ALIAS_ID')
+        
+        if not agent_id or not agent_alias_id:
+            return {
+                'success': False,
+                'error': 'BEDROCK_AGENT_ID and BEDROCK_AGENT_ALIAS_ID environment variables required'
+            }
+        
+        # Get Athena configuration from environment variables
+        print("Retrieving Athena configuration from environment...")
+        database_name = os.environ.get('ATHENA_DATABASE_NAME', 'mcp_demo_asset_management')
+        output_location = os.environ.get('ATHENA_OUTPUT_LOCATION')
+        workgroup_name = os.environ.get('ATHENA_WORKGROUP_NAME')
+        
+        if not output_location:
+            return {
+                'success': False,
+                'error': 'ATHENA_OUTPUT_LOCATION environment variable required'
+            }
+        
+        if not workgroup_name:
+            return {
+                'success': False,
+                'error': 'ATHENA_WORKGROUP_NAME environment variable required'
+            }
+        
+        print("All clients and configuration initialized successfully")
+        
         return {
-            "statusCode": 500,
-            "error": str(e),
+            'success': True,
+            'bedrock_client': bedrock_client,
+            'athena_client': athena_client,
+            'agent_id': agent_id,
+            'agent_alias_id': agent_alias_id,
+            'database_name': database_name,
+            'output_location': output_location,
+            'workgroup_name': workgroup_name
         }
+        
+    except Exception as e:
+        print(f"Unexpected error during client initialization: {str(e)}")
+        return {
+            'success': False,
+            'error': f'Unexpected error: {str(e)}'
+        }
+
+def invoke_bedrock_agent(bedrock_client, question: str, agent_id: str, agent_alias_id: str) -> str:
+    """
+    Invoke the Bedrock agent to generate SQL from natural language.
+    Returns the generated SQL query or empty string on failure.
+    """
+    try:
+        print(f"Invoking Bedrock agent: {agent_id} with question: {question}")
+        print(f"Agent alias ID: {agent_alias_id}")
+        print(f"Session ID: session-{int(time.time())}")
+        
+        agent_response = bedrock_client.invoke_agent(
+            inputText=question,
+            agentId=agent_id,
+            agentAliasId=agent_alias_id,
+            sessionId=f"session-{int(time.time())}",
+            enableTrace=False,
+            endSession=False
+        )
+        print("Agent response received successfully")
+        print(f"Agent response type: {type(agent_response)}")
+        print(f"Agent response keys: {list(agent_response.keys()) if hasattr(agent_response, 'keys') else 'No keys'}")
+        
+        print("Agent response received, extracting SQL query...")
+        print("Attempting to extract SQL query from agent response...")
+        
+        # Parse and display the actual content of the EventStream for debugging
+        if 'completion' in agent_response and hasattr(agent_response['completion'], '__iter__'):
+            parsed_content = parse_eventstream_content(agent_response['completion'])
+            print(f"Agent response EventStream content: {parsed_content}")
+            
+            # Store the parsed content for later use since EventStreams can only be iterated once
+            agent_response['_parsed_completion'] = parsed_content
+        else:
+            print(f"Agent response content without completion key: {str(agent_response)}...")
+        
+        sql_query = extract_sql_query(agent_response)
+        print(f"Extracted SQL query: {sql_query}")
+        
+        if not sql_query:
+            print("No SQL query extracted from agent response")
+            print(f"Full agent response: {str(agent_response)}")
+            return ""
+        
+        return sql_query
+        
+    except Exception as e:
+        print(f"Error invoking Bedrock agent: {str(e)}")
+        print(f"Error type: {type(e)}")
+        raise e
+
+def execute_athena_query(athena_client, sql_query: str, database_name: str, output_location: str, workgroup_name: str) -> Dict[str, Any]:
+    """
+    Execute SQL query using Athena and return results.
+    Returns a dictionary with success status and results or error information.
+    """
+    try:
+        print(f"Starting Athena query execution...")
+        print(f"Database: {database_name}")
+        print(f"Output location: {output_location}")
+        
+        # Parse the S3 bucket and key from output_location
+        if output_location.startswith('s3://'):
+            s3_parts = output_location[5:].split('/', 1)
+            bucket_name = s3_parts[0]
+            prefix = s3_parts[1] if len(s3_parts) > 1 else ""
+            print(f"Parsed S3 bucket: {bucket_name}")
+            print(f"Parsed S3 prefix: {prefix}")
+        
+        query_execution = athena_client.start_query_execution(
+            QueryString=sql_query,
+            QueryExecutionContext={
+                'Database': database_name
+            },
+            WorkGroup=workgroup_name
+        )
+        print("Athena query execution started successfully")
+        print(f"Query execution response: {query_execution}")
+        
+        query_execution_id = query_execution['QueryExecutionId']
+        print(f"Query execution ID: {query_execution_id}")
+        
+        # Wait for the query to complete
+        print("Waiting for query completion...")
+        attempts = 0
+        max_attempts = 150  # 5 minutes max (150 * 2 seconds)
+        
+        while attempts < max_attempts:
+            attempts += 1
+            try:
+                query_status = athena_client.get_query_execution(QueryExecutionId=query_execution_id)
+                state = query_status['QueryExecution']['Status']['State']
+                print(f"Query status check #{attempts}: {state}")
+                
+                if state in ['SUCCEEDED', 'FAILED', 'CANCELLED']:
+                    break
+                
+                time.sleep(2)  # Wait 2 seconds before checking again
+            except Exception as e:
+                print(f"Error checking query status: {str(e)}")
+                time.sleep(2)
+        
+        if attempts >= max_attempts:
+            print("Query monitoring timed out after 5 minutes")
+            state = 'TIMEOUT'
+        
+        print(f"Query completed with final state: {state}")
+        
+        if state == 'SUCCEEDED':
+            print("Query succeeded, fetching results...")
+            
+            try:
+                # Fetch the query results
+                results = athena_client.get_query_results(QueryExecutionId=query_execution_id)
+                print("Query results fetched successfully")
+                print(f"Results type: {type(results)}")
+                print(f"Results keys: {list(results.keys()) if hasattr(results, 'keys') else 'No keys'}")
+                
+                # Process and format the results
+                print("Formatting results...")
+                formatted_results = format_athena_results(results)
+                print(f"Results formatted successfully: {len(formatted_results) if isinstance(formatted_results, list) else 'Not a list'}")
+                
+                return {
+                    'success': True,
+                    'query_execution_id': query_execution_id,
+                    'results': formatted_results
+                }
+            except Exception as e:
+                print(f"Error processing query results: {str(e)}")
+                print(f"Error type: {type(e)}")
+                raise e
+        else:
+            # Query failed
+            print(f"Query failed with state: {state}")
+            error_info = query_status['QueryExecution']['Status'].get('StateChangeReason', 'Unknown error')
+            print(f"Error details: {error_info}")
+            
+            return {
+                'success': False,
+                'error': f'Query execution failed with state: {state}',
+                'details': error_info,
+                'query_execution_id': query_execution_id
+            }
+            
+    except Exception as e:
+        print(f"Error starting Athena query execution: {str(e)}")
+        print(f"Error type: {type(e)}")
+        return {
+            'success': False,
+            'error': 'Failed to start Athena query execution',
+            'details': str(e)
+        }
+
+def parse_eventstream_content(eventstream_obj) -> str:
+    """
+    Parse an EventStream object and extract its content as a readable string.
+    This is useful for debugging and understanding what's inside the EventStream.
+    """
+    try:
+        # Handle non-iterable objects
+        if isinstance(eventstream_obj, str):
+            return eventstream_obj
+        
+        if not hasattr(eventstream_obj, '__iter__'):
+            return str(eventstream_obj)
+        
+        print("Parsing EventStream object...")
+        print(f"EventStream object type: {type(eventstream_obj)}")
+        
+        # Simple approach: extract bytes from chunk events
+        completion = ""
+        event_count = 0
+        
+        for event in eventstream_obj:
+            event_count += 1
+            print(f"Processing event #{event_count}: {type(event)}")
+            
+            # Handle case where event is a dictionary
+            if isinstance(event, dict):
+                print(f"Event is a dictionary with keys: {list(event.keys())}")
+                print(f"Event content: {event}")
+                
+                if 'chunk' in event:
+                    chunk = event['chunk']
+                    print(f"Found chunk: {chunk}")
+                    
+                    if 'bytes' in chunk:
+                        try:
+                            chunk_bytes = chunk['bytes']
+                            chunk_str = chunk_bytes.decode('utf-8')
+                            completion += chunk_str
+                            print(f"Extracted bytes from chunk: {chunk_str}")
+                        except Exception as e:
+                            print(f"Error decoding chunk bytes: {str(e)}")
+            
+            # Handle case where event has chunk attribute
+            elif hasattr(event, 'chunk'):
+                chunk = event.chunk
+                print(f"Event has chunk attribute: {chunk}")
+                
+                if hasattr(chunk, 'bytes'):
+                    try:
+                        chunk_bytes = chunk.bytes
+                        chunk_str = chunk_bytes.decode('utf-8')
+                        completion += chunk_str
+                        print(f"Extracted bytes from chunk.bytes: {chunk_str}")
+                    except Exception as e:
+                        print(f"Error decoding chunk.bytes: {str(e)}")
+            
+            # Limit the number of events we process to avoid infinite loops
+            if event_count > 10:
+                print(f"Stopping after {event_count} events to avoid infinite loop")
+                break
+        
+        print(f"Processed {event_count} events")
+        print(f"Total extracted completion: {completion}")
+        
+        return completion if completion else f"No content extracted from EventStream (processed {event_count} events)"
+            
+    except Exception as e:
+        return f"Error parsing EventStream: {str(e)}"
+
+def extract_sql_query(agent_response: Dict[str, Any]) -> str:
+    """
+    Extract SQL query from the Bedrock agent response.
+    The agent should return a simple completion string.
+    """
+    try:
+        # Check if completion field exists
+        if 'completion' in agent_response:
+            completion = agent_response['completion']
+            print(f"Completion field found: {completion}")
+            print(f"Completion type: {type(completion)}")
+            
+            # Check if we already have parsed content from the EventStream
+            if '_parsed_completion' in agent_response:
+                parsed_content = agent_response['_parsed_completion']
+                print(f"Using stored parsed content: {parsed_content}")
+            else:
+                # Parse EventStream content for debugging (fallback)
+                parsed_content = parse_eventstream_content(completion)
+                print(f"Parsed EventStream content: {parsed_content}")
+            
+            # Handle EventStream object
+            if hasattr(completion, '__iter__') and not isinstance(completion, str):
+                print("Completion is an iterable object, attempting to extract content...")
+                
+                # Use the parsed content from parse_eventstream_content
+                if parsed_content and not parsed_content.startswith("No content extracted") and not parsed_content.startswith("Error"):
+                    print(f"Using parsed content: {parsed_content}")
+                    
+                    # Try to parse as JSON to get the actual SQL
+                    try:
+                        import json
+                        content_json = json.loads(parsed_content)
+                        if 'completion' in content_json:
+                            sql_query = content_json['completion'].strip()
+                            print(f"Extracted SQL from JSON completion: {sql_query}")
+                            return sql_query
+                        elif 'response' in content_json:
+                            sql_query = content_json['response'].strip()
+                            print(f"Extracted SQL from JSON response: {sql_query}")
+                            return sql_query
+                        else:
+                            # Return the raw content if no specific field found
+                            return parsed_content.strip()
+                    except json.JSONDecodeError:
+                        # If not JSON, return the raw content
+                        return parsed_content.strip()
+                else:
+                    print("No completion content extracted from EventStream")
+                    return ""
+            else:
+                # Convert to string and clean up
+                completion_text = str(completion)
+                print(f"Completion as string: {completion_text}")
+                
+                # Clean up any potential whitespace and return the SQL
+                return completion_text.strip()
+        
+        # Fallback: try response field if completion is not available
+        if 'response' in agent_response:
+            response_text = str(agent_response['response'])
+            print(f"Using response field: {response_text}")
+            return response_text.strip()
+        
+        print(f"Could not extract SQL from agent response: {agent_response}")
+        return ""
+        
+    except Exception as e:
+        print(f"Error extracting SQL query: {str(e)}")
+        print(f"Exception type: {type(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        return ""
+
+def format_athena_results(results: Dict[str, Any]) -> list:
+    """
+    Format Athena query results into a clean, readable structure.
+    """
+    try:
+        if 'ResultSet' not in results or 'Rows' not in results['ResultSet']:
+            return []
+        
+        rows = results['ResultSet']['Rows']
+        if not rows:
+            return []
+        
+        # First row contains column headers
+        headers = []
+        if rows:
+            header_row = rows[0]
+            if 'Data' in header_row:
+                headers = [col.get('VarCharValue', '') for col in header_row['Data']]
+        
+        # Process data rows
+        formatted_results = []
+        for row in rows[1:]:  # Skip header row
+            if 'Data' in row:
+                row_data = [col.get('VarCharValue', '') for col in row['Data']]
+                # Create a dictionary with column names
+                row_dict = dict(zip(headers, row_data))
+                formatted_results.append(row_dict)
+        
+        return formatted_results
+        
+    except Exception as e:
+        print(f"Error formatting Athena results: {str(e)}")
+        return []

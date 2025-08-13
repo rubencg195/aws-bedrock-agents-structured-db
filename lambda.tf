@@ -32,9 +32,13 @@ resource "aws_lambda_function" "bedrock_invoke" {
   environment {
     variables = {
       BEDROCK_REGION = data.aws_region.current.region
-      KNOWLEDGE_BASE_ID = aws_bedrockagent_knowledge_base.main.id
       MODEL_ARN = local.mcp_client_model_arn
       LOG_LEVEL = "INFO"
+      BEDROCK_AGENT_ID = aws_bedrockagent_agent.athena_translator.id
+      BEDROCK_AGENT_ALIAS_ID = aws_bedrockagent_agent_alias.athena_translator_alias.agent_alias_id 
+      ATHENA_DATABASE_NAME = aws_glue_catalog_database.asset_management.name
+      ATHENA_OUTPUT_LOCATION = "s3://${aws_s3_bucket.athena_query_results.bucket}/query-results/"
+      ATHENA_WORKGROUP_NAME = aws_athena_workgroup.main.name
     }
   }
   tags = local.tags

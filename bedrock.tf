@@ -1,139 +1,94 @@
-# Bedrock Knowledge Base Configuration
-resource "aws_bedrockagent_knowledge_base" "main" {
-  name        = "${local.project_name}-knowledge-base"
-  description = "Knowledge base for MCP client"
-  role_arn    = aws_iam_role.bedrock_knowledge_base_role.arn
+# Bedrock Agent Configuration for Natural Language to SQL Translation
 
-  knowledge_base_configuration {
-    type = "VECTOR"
-    vector_knowledge_base_configuration {
-      embedding_model_arn = local.embedding_model_arn
+# Bedrock Agent for SQL Generation
+resource "aws_bedrockagent_agent" "athena_translator" {
+  agent_name = "${local.project_name}-athena-translator"
+  description = "Agent that translates natural language queries into SQL for structured data sources"
+  
+  # Agent configuration for SQL generation
+  agent_resource_role_arn = aws_iam_role.bedrock_agent_role.arn
+  
+  # Foundation model for the agent
+  foundation_model = local.mcp_client_model_arn
+  
+  # Agent configuration
+  idle_session_ttl_in_seconds = 3600 # 1 hour
+  
+  # Agent configuration for SQL generation
+  instruction = <<-EOT
+  You are an Athena PrestoDB translation agent that converts natural language queries into Athena PrestoDB statements.
+  You do not have access to the data, your only job is to generate the SQL query.
+  
+  Your task is to:
+  1. Understand the user's natural language query
+  2. Generate appropriate Athena PrestoDB queries based on the schema below
+  3. Ensure the Athena PrestoDB statement is syntactically correct and follows best practices
+  
+  Table: "assets"
+  
+  Table "assets" schema:
+  - "tag"
+  - "type"
+  - "building"
+  - "replacement_asset_value"
+  - "installation_date"
+  - "planned_replacement_date"
+  - "estimated_end_of_life"
+  - "remaining_useful_life"
+  - "estimated_replacement_cost"
+  - "estimated_replacement_date"
+  - "warranty_expiration_date"
+  - "lifetime_maintenance_cost"
+  - "last_12_months_maintenance_cost"
+  - "average_annual_maintenance_cost"
+  - "mc_rav_percentage"
+  - "manufacturer"
+  - "date_purchased"
+  - "filter_size"
+  - "vin_number"
+  - "last_maintenance_date"
+  - "maintenance_cost"
+  - "notes"
 
-             embedding_model_configuration {
-         bedrock_embedding_model_configuration {
-           dimensions          = local.rds_embedding_dimensions
-           embedding_data_type = "FLOAT32"
-         }
-       }
 
-      supplemental_data_storage_configuration {
-        storage_location {
-          type = "S3"
-          s3_location {
-            uri = local.knowledge_base_bucket_storage_uri
-          }
-        }
-      }
-    }
-  }
+  Take in account that all collumns are of type string. So for date or numeric value searches you will have to use the like operators.
+  Always generate valid SQL Athena PrestoDB. DO NOT RETURN ANYTHING ELSE, JUST PRESTO DB ATHENA SQL.
 
-  storage_configuration {
-    type = "RDS"
-    rds_configuration {
-      resource_arn = aws_rds_cluster.bedrock_vector_store.arn
-      credentials_secret_arn = aws_secretsmanager_secret.rds_credentials.arn
-      database_name = aws_rds_cluster.bedrock_vector_store.database_name
-      table_name = "bedrock_vectors"
-      field_mapping {
-        primary_key_field = "id"
-        vector_field   = "embedding"
-        text_field     = "content"
-        metadata_field = "metadata"
-      }
-    }
-  }
+  EXAMPLE #1:
+  Input: "What is the total maintenance cost for all assets?"
+  Output: "SELECT SUM(maintenance_cost) FROM assets"
 
-  depends_on = [
-    aws_rds_cluster.bedrock_vector_store,
-    aws_rds_cluster_instance.bedrock_vector_store,
-    aws_secretsmanager_secret.rds_credentials,
-    aws_secretsmanager_secret_version.rds_credentials,
-    aws_kms_key.bedrock_knowledge_base_key,
-    aws_s3_bucket.knowledge_base_input_data,
-    aws_s3_bucket.knowledge_base_storage
-  ]
+  EXAMPLE #2:
+  Input: "Give me all the assets that have a maintenance cost greater than 1000"
+  Output: "SELECT * FROM assets WHERE CAST(maintenance_cost AS DOUBLE) > 1000"
 
+  EXAMPLE #3:
+  Input: "Show me all assets purchased in 2022"
+  Output: "SELECT * FROM assets WHERE date_purchased LIKE '%2022%'"
+
+  EXAMPLE #4:
+  Input: "What is the average maintenance cost of assets with maintenance in 2021?"
+  Output: "SELECT AVG(CAST(maintenance_cost AS DOUBLE)) FROM assets WHERE last_maintenance_date LIKE '%2021%'"
+
+  RETURN ONLY THE ATHENA PRESTO SQL QUERY, NO OTHER TEXT. I REPEAT, NO OTHER TEXT.
+  EOT
+  
   tags = local.tags
 }
 
-
-# KMS Key for Bedrock Knowledge Base (still needed for RDS)
-resource "aws_kms_key" "bedrock_knowledge_base_key" {
-  description = "KMS key for Bedrock Knowledge Base"
-  key_usage = "ENCRYPT_DECRYPT"
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {   
-          AWS = [
-            aws_iam_role.bedrock_knowledge_base_role.arn,
-            "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root",
-            data.aws_caller_identity.current.arn
-          ]
-        }
-        Action = "kms:*"
-        Resource = "*"
-      }
-    ]
-  })
+# Bedrock Agent Alias
+resource "aws_bedrockagent_agent_alias" "athena_translator_alias" {
+  agent_alias_name = "${local.project_name}-athena-translator-alias"
+  agent_id = aws_bedrockagent_agent.athena_translator.id
+  description = "Production alias for Athena SQL translator agent"
+  
   tags = local.tags
 }
 
-resource "aws_kms_alias" "bedrock_knowledge_base_key_alias" {
-  name = "alias/${local.project_name}-bedrock-kb"
-  target_key_id = aws_kms_key.bedrock_knowledge_base_key.key_id
-}
-
-resource "aws_bedrockagent_data_source" "example" {
-  knowledge_base_id = aws_bedrockagent_knowledge_base.main.id
-  name              = local.project_name
-  data_deletion_policy = "RETAIN"
-  data_source_configuration {
-    type = "S3"
-    s3_configuration {
-      bucket_arn = aws_s3_bucket.knowledge_base_input_data.arn
-      inclusion_prefixes = [local.knowledge_base_input_data_prefix]
-    }
-  }
-  vector_ingestion_configuration {
-    chunking_configuration {
-      # SEMANTIC CHUNKING
-      # chunking_strategy = "SEMANTIC" 
-      # semantic_chunking_configuration {
-      #   breakpoint_percentile_threshold = 90
-      #   buffer_size = 1
-      #   max_token = 1024
-      # }
-
-      # FIXED SIZE CHUNKING
-      chunking_strategy = "FIXED_SIZE"
-      fixed_size_chunking_configuration {
-        max_tokens = 4096
-        overlap_percentage = 1
-      }
-
-      # HIERARCHICAL CHUNKING
-      # chunking_strategy = "HIERARCHICAL"
-      # hierarchical_chunking_configuration {
-      #   overlap_tokens = 100
-      #   level_configuration {
-      #     max_tokens = 1024
-      #   }
-      # }
-
-    }
-  }
-  depends_on = [
-    aws_bedrockagent_knowledge_base.main
-  ]
-}
-
-# IAM Role for Bedrock Knowledge Base
-resource "aws_iam_role" "bedrock_knowledge_base_role" {
-  name = "${local.project_name}-bedrock-kb-role"
-
+# IAM Role for Bedrock Agent
+resource "aws_iam_role" "bedrock_agent_role" {
+  name = "${local.project_name}-bedrock-agent-role"
+  
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -146,82 +101,27 @@ resource "aws_iam_role" "bedrock_knowledge_base_role" {
       }
     ]
   })
-
+  
   tags = local.tags
 }
 
-# IAM Policy for Bedrock Knowledge Base
-resource "aws_iam_role_policy" "bedrock_knowledge_base_policy" {
-  name = "${local.project_name}-bedrock-kb-policy"
-  role = aws_iam_role.bedrock_knowledge_base_role.id
-
+# IAM Policy for Bedrock Agent
+resource "aws_iam_role_policy" "bedrock_agent_policy" {
+  name = "${local.project_name}-bedrock-agent-policy"
+  role = aws_iam_role.bedrock_agent_role.id
+  
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
         Effect = "Allow"
         Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:ListBucket"
+          "bedrock:*"
         ]
         Resource = [
-         aws_s3_bucket.knowledge_base_input_data.arn,
-          "${aws_s3_bucket.knowledge_base_input_data.arn}/*",
-          aws_s3_bucket.knowledge_base_storage.arn,
-          "${aws_s3_bucket.knowledge_base_storage.arn}/*"
+          "*"
         ]
       },
-      {
-        Effect = "Allow"
-        Action = [
-          "rds:DescribeDBInstances",
-          "rds:DescribeDBClusters",
-          "rds:DescribeDBClusterParameters",
-          "rds:DescribeDBParameters"
-        ]
-        Resource = aws_rds_cluster.bedrock_vector_store.arn
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "rds-data:ExecuteStatement",
-          "rds-data:BatchExecuteStatement",
-          "rds-data:BeginTransaction",
-          "rds-data:CommitTransaction",
-          "rds-data:RollbackTransaction"
-        ]
-        Resource = aws_rds_cluster.bedrock_vector_store.arn
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret"
-        ]
-        Resource = aws_secretsmanager_secret.rds_credentials.arn
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "bedrock:InvokeModel",
-          "bedrock:InvokeModelWithResponseStream"
-        ]
-        Resource = [
-          local.embedding_model_arn,
-          "arn:aws:bedrock:${data.aws_region.current.region}::foundation-model/*"
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "kms:*"
-        ]
-        Resource = [
-          aws_kms_key.bedrock_knowledge_base_key.arn
-        ]
-      }
     ]
   })
 }
