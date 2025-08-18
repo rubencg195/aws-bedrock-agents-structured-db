@@ -225,6 +225,8 @@ The Bedrock Agent can help you query this data using natural language:
 - "What's the average replacement cost by asset type?"
 - "Which buildings have the most expensive assets?"
 
+**For more detailed statistics and query examples, see the [Example Questions](./questions/example-questions.md) file which contains comprehensive testing results including LLM-generated SQL queries, execution times, and actual results from the Bedrock Agent.**
+
 ---
 
 **Note**: This project demonstrates best practices for building AI-powered SQL translation using AWS Bedrock Agent with Athena. The agent automatically converts natural language queries into optimized SQL statements for your asset management data.
