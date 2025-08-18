@@ -69,9 +69,12 @@ SELECT AVG(CAST(replacement_asset_value AS DOUBLE)) AS average_replacement_asset
 SELECT building FROM assets WHERE tag LIKE '%1629132 - AHU 14-ES%'
 ```
 
-**LLM-Answer:** ERROR: Lambda invocation failed: System.Management.Automation.RemoteException An error occurred (InvalidRequestContentException) when calling the Invoke operation: Could not parse request body into json: Could not parse payload into json: Unexpected character ('1' (code 49)): was expecting comma to separate Object entries at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 52] (after 3 attempts)
+**LLM-Answer:** ` [{\"building\": \"FMX Elementary School\"}]`
 
-**LLM-Query:** ERROR: Lambda invocation failed: System.Management.Automation.RemoteException An error occurred (InvalidRequestContentException) when calling the Invoke operation: Could not parse request body into json: Could not parse payload into json: Unexpected character ('1' (code 49)): was expecting comma to separate Object entries at [Source: REDACTED (`StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 52] (after 3 attempts)
+**LLM-Query:** 
+```sql
+SELECT building FROM assets WHERE tag LIKE '%1629132 - AHU 14-ES%'
+```
 
 **LLM-Execution-Time:** 0ms
 
