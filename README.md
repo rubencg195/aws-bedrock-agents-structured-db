@@ -82,10 +82,34 @@ The `assets` table includes the following columns (all stored as strings):
 
 
 ### Example Queries
-- "What is the total maintenance cost for all assets?"
-- "Show me all assets purchased in 2022"
-- "What is the average maintenance cost of assets with maintenance in 2021?"
-- "Give me all the assets that have a maintenance cost greater than 1000"
+
+The Bedrock Agent can handle various types of natural language queries. Here are some examples based on actual testing:
+
+#### Asset Count and Location Queries
+- "How many assets are located in FMX High School?"
+- "How many unique buildings are represented in the dataset?"
+- "What is the total count of assets in the dataset?"
+
+#### Asset Type and Manufacturer Analysis
+- "What is the type of all assets in the dataset?"
+- "Which manufacturer appears most frequently in the dataset?"
+- "Which manufacturer (with no empty values) appears most frequently in the dataset?"
+- "What percentage of assets were manufactured by Trane?"
+
+#### Date-Based Queries
+- "Which building has a unit installed on 2/20/2020?"
+- "How many assets have a planned replacement date after 2035?"
+- "Which assets have an estimated end-of-life in 2045 but a planned replacement before 2035?"
+
+#### Financial and Maintenance Analysis
+- "What is the average replacement Asset Value of each asset?"
+- "How many assets do not have a specified manufacturer?"
+- "What is the average remaining useful life (in years)?"
+
+#### Complex Asset Lookup
+- "Which school has the asset with Tag '1629132 - AHU 14-ES'?"
+
+**Note**: The agent automatically converts these natural language questions into optimized Athena SQL queries and executes them against your asset management database.
 
 ## 🔧 Troubleshooting
 
