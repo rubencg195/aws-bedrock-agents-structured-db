@@ -1,0 +1,67 @@
+[
+  {
+    "id": 1,
+    "question": "How many assets are located in FMX High School?",
+    "expected_answer": "47 in CSV, 63 in Glue"
+  },
+  {
+    "id": 2,
+    "question": "What is the type of all assets in the dataset?",
+    "expected_answer": "Electrical, HVAC, Plumbing, Vehicle, Fire Safety"
+  },
+  {
+    "id": 3,
+    "question": "What is the average replacement Asset Value of each asset?",
+    "expected_answer": "12000"
+  },
+  {
+    "id": 4,
+    "question": "Which school has the asset with Tag \"1629132 - AHU 14-ES\"?",
+    "expected_answer": "FMX Elementary School"
+  },
+  {
+    "id": 5,
+    "question": "Which manufacturer appears most frequently in the dataset?",
+    "expected_answer": "Trane 9 times"
+  },
+  {
+    "id": 6,
+    "question": "Which manufacturer (with no empty values) appears most frequently in the dataset?",
+    "expected_answer": "Trane 9 times"
+  },
+  {
+    "id": 7,
+    "question": "Which building has a unit installed on 2/20/2020?",
+    "expected_answer": "FMX Middle School"
+  },
+  {
+    "id": 8,
+    "question": "How many unique buildings are represented in the dataset?",
+    "expected_answer": "3"
+  },
+  {
+    "id": 9,
+    "question": "How many assets have a planned replacement date after 2035?",
+    "expected_answer": "3"
+  },
+  {
+    "id": 10,
+    "question": "Which assets have an estimated end-of-life in 2045 but a planned replacement before 2035?",
+    "expected_answer": "14"
+  },
+  {
+    "id": 11,
+    "question": "How many assets do not have a specified manufacturer?",
+    "expected_answer": "5"
+  },
+  {
+    "id": 12,
+    "question": "What is the average remaining useful life (in years)?",
+    "expected_answer": "20.06"
+  },
+  {
+    "id": 13,
+    "question": "What percentage of assets were manufactured by Trane?",
+    "expected_answer": "45"
+  }
+]

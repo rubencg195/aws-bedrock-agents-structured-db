@@ -24,3 +24,4 @@ lambda/*
 .old
 .dependbuild
 .rds_connection_info.txt
+.all-questions.txt

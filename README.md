@@ -115,6 +115,19 @@ tofu apply -auto-approve
 - **Cause**: Network issues or AWS API throttling
 - **Solution**: Wait a few minutes and retry `tofu apply -auto-approve`
 
+**Data corruption or table schema issues**
+- **Cause**: Corrupted data files or incorrect table schema definitions
+- **Solution**: Use Terraform/OpenTofu to destroy and recreate the data infrastructure:
+```bash
+# Destroy the data-related resources (S3 data and Glue table)
+tofu destroy --target=aws_s3_object.asset_data --target=aws_glue_catalog_table.assets --auto-approve
+
+# Recreate the infrastructure (this will recreate the table and upload data)
+tofu apply -auto-approve
+```
+
+**Note**: This process will recreate the Glue table with the correct schema and reupload your CSV data from the `knowledge-bases/` folder.
+
 ### Useful Commands
 
 ```bash
