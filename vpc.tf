@@ -76,9 +76,9 @@ resource "aws_route_table_association" "private" {
 }
 
 resource "aws_cloudwatch_log_group" "flow_logs" {
-  name              = "flow-logs"
+  name              = "${local.project_name}-flow-logs"
   retention_in_days = local.flow_logs_retention
-  tags              = merge(local.tags, { Name = "flow-logs" })
+  tags              = merge(local.tags, { Name = "${local.project_name}-flow-logs" })
 }
 
 resource "aws_flow_log" "vpc" {
@@ -87,18 +87,5 @@ resource "aws_flow_log" "vpc" {
   vpc_id               = aws_vpc.main.id
   traffic_type         = "ALL"
   iam_role_arn         = aws_iam_role.vpc_logs_role.arn
-  tags                 = merge(local.tags, { Name = "flow-logs" })
+  tags                 = merge(local.tags, { Name = "${local.project_name}-flow-logs" })
 }
-
-resource "aws_security_group" "opensearch" {
-  name   = "${local.vpc_name}-opensearch-sg"
-  vpc_id = aws_vpc.main.id
-}
-
-# TODO: Setup VPCe lockdown Communication between OpenSearch and Bedrock
-# resource "aws_opensearchserverless_vpc_endpoint" "opensearch" {
-#   name               = "${local.vpc_name}-opensearch"
-#   vpc_id             = aws_vpc.main.id
-#   subnet_ids         = aws_subnet.private.*.id
-#   security_group_ids = [aws_security_group.opensearch.id]
-# }
